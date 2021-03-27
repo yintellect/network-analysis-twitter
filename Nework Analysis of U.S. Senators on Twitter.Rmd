@@ -1,0 +1,353 @@
+---
+title: 'Nework Analysis of U.S. Senators on Twitter'
+author: "Yi Yin"
+date: "4/16/2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r Setup, include=FALSE, results='hide', warning=FALSE}
+library(knitr)
+opts_chunk$set(fig.path="figures/",
+               cache.path="cache/",
+               cache=TRUE,
+               echo=TRUE,
+               message=FALSE,
+               warning=FALSE)  
+```  
+
+```{r load data, message=FALSE, warning=FALSE, include=FALSE}
+rm(list = ls())
+library(tidyverse)
+```
+
+# 1. Who follows whom?
+## a) Network of Followers
+
+```{r, message=FALSE}
+links<-read_csv("senators_follow.csv")%>%
+        select(source, target, following)%>%
+        filter(following=='TRUE')%>%select(-following)%>%
+        rename(from = source, to = target)
+
+nodes <-read_csv("senators_twitter.csv")%>%
+        select(`Official Twitter`, 
+                         Senator,
+                         State,
+                         `Party affiliation`,
+                         label)%>%
+        rename( id = `Official Twitter`,
+                party = `Party affiliation`,
+                name = Senator,
+                state = State)
+        
+links <-links%>%filter(from %in% nodes$id)%>%
+        filter(to %in% nodes$id)
+```
+
+Create a directed network graph.
+```{r}
+library("igraph")
+net <- graph_from_data_frame(d=links, vertices=nodes, directed=T)
+```
+
+### the highest “in-degree”
+Identify the three senators who are followed by the most of their colleagues
+```{r top indegree}
+nodes$indegree<-degree(net, mode = "in",normalized = T)
+nodes%>%select(name, indegree)%>%arrange(desc(indegree))%>%top_n(3)
+```
+
+```{r graph configure}
+nodes<-nodes%>%
+        mutate(pcolor = case_when(party =="Democratic Party" ~ "#58A5D4",
+                                  party =="Independent" ~ "#D9A6DF",
+                                  party =="Republican Party" ~"#DB3F3F"))
+
+
+E(net)$width <- 0.1
+E(net)$edge.color <- "#7F7F7F1A"
+V(net)$label.family <-"Palatino"
+V(net)$label.color <-"#292527"
+V(net)$color <- nodes$pcolor
+```
+
+
+```{r fig.align="center", fig.height=11, fig.width=13,results='hide'}
+nodes<-nodes%>%mutate(topin = ifelse(indegree>=0.89,
+                                     str_remove(label,"\\s\\([R|D]\\)"),
+                                     NA))
+V(net)$label <- nodes$topin
+V(net)$label.cex <- 1
+V(net)$label.degree<-pi/3
+V(net)$label.dist <-0.5
+V(net)$size <- nodes$indegree*5
+E(net)$arrow.size <- 0.4
+
+tex <- "(blue = Democrat, red = Republican, purple = independent)\n(size: Indegree centrality)"
+
+
+plot(net, layout=layout_with_kk(net))+
+        title("Having Followers",sub = tex, 
+   font.sub = 3, 
+   font.main = 2,
+   cex.main = 1.5,
+   cex.sub= 1)
+```
+
+### the highest “out-degree”
+
+the three senators who follow the most of their colleagues 
+```{r}
+nodes$outdegree<-igraph::degree(net, mode = "out",normalized = T)
+nodes%>%select(name, outdegree)%>%arrange(desc(outdegree))%>%
+        .[0:3,]
+
+```
+
+### the highest “out-degree”
+```{r fig.align="center", fig.height=11, fig.width=13,results='hide'}
+nodes<-nodes%>%mutate(topout = ifelse(outdegree>=0.74, 
+                                      str_remove(label,"\\s\\([R|D]\\)"),
+                                      NA))
+V(net)$label <- nodes$topout
+V(net)$label.cex <- 1
+V(net)$label.degree<-pi/3
+V(net)$label.dist <-0.5
+V(net)$size <- nodes$outdegree*5
+E(net)$arrow.size <- 0.4
+
+
+tex <- "(blue = Democrat, red = Republican, purple = independent)\n(size: Outdegree centrality)"
+
+plot(net, layout=layout_with_kk(net))+
+        title("Following", sub = tex, 
+   font.sub = 3, 
+   font.main = 2,
+   cex.main = 1.5,
+   cex.sub= 1)
+```
+
+### the highest “centrality”
+(blue = Democrat, red = Republican, purple = independent) 
+(size: Eigenvector centrality)
+```{r}
+nodes$central<-eigen_centrality(net, directed = TRUE, scale = TRUE,weights = NULL, options = arpack_defaults)$vector
+nodes%>%select(name,central)%>%arrange(desc(central))%>%
+        .[0:3,]
+
+```
+
+```{r, fig.height=11, fig.width=13, results='hide'}
+
+nodes<-nodes%>%mutate(topcent = ifelse(central>=0.98, 
+                                      str_remove(label,"\\s\\([R|D]\\)"),
+                                     NA))
+V(net)$label <- nodes$topcent
+V(net)$label.cex <- 1
+V(net)$label.degree<-pi/3
+V(net)$label.dist <-0.5
+V(net)$size <- nodes$central*5
+E(net)$arrow.size <- 0.4
+
+tex <- "(blue = Democrat, red = Republican, purple = independent)\n(size: Eigenvector centrality)"
+plot(net, layout=layout_with_kk(net))+
+        title("Eigenvector Centrality",sub = tex, 
+   font.sub = 3, 
+   font.main = 2,
+   cex.main = 1.5,
+   cex.sub= 1)
+```
+
+
+
+
+## b) Communities
+Community detection result is similer to party identification.
+```{r}
+
+wc <- cluster_walktrap(net)  # find "communities"
+members <- membership(wc)
+# library(RColorBrewer)
+mcol <-RColorBrewer::brewer.pal(8, "Pastel1")
+
+
+```
+
+
+```{r,fig.height=10, fig.width=20, message=FALSE, warning=FALSE, results='hide'}
+par(mfrow=c(1,2))
+E(net)$edge.color <- "#7F7F7F66"
+E(net)$arrow.size <- 0.1
+E(net)$width <- 0.3
+V(net)$label <- NA
+V(net)$size <- 5
+V(net)$color <- mcol[members]
+tex <- "Color of Node: Community Cluster"
+plot(net,layout=layout_with_kk(net))+
+        title("Community Detection",
+              sub = tex, 
+              font.sub = 3, 
+                font.main = 2,
+                cex.main = 2,
+                cex.sub= 1)
+
+
+V(net)$size <- 5
+V(net)$color <- nodes$pcolor
+tex <- "(blue = Democrat, red = Republican, purple = independent)"
+plot(net,layout=layout_with_kk(net))+title("Party Identification",          
+                                           sub = tex, font.sub = 3, 
+                                           font.main = 2,cex.main = 2,
+                                           cex.sub= 1)
+dev.off()
+```
+
+
+# 2. Are you talking to me?
+
+## a) Identifying Re-Tweets
+
+Select the set of re-tweeted messages from other senators and identify the source of the originating message. 
+
+Calculate by senator the amount of re-tweets they received and from which party these re-tweets came. 
+```{r, echo=FALSE}
+retw<-senator_tweets %>% 
+        filter(is_retweet==TRUE)%>%
+        select(text, screen_name)%>%
+        mutate(source = str_extract(text,"(?<=(RT\\s@))([^:]*)(?=:\\s)"))%>%
+        filter(source %in% screen_name)%>%
+        select(-text)
+
+wre<-retw%>%filter(screen_name!=source)%>%
+        group_by(screen_name, source)%>%
+        summarise(weight=n())%>%
+        ungroup()%>%mutate(screen_name=tolower(screen_name),
+                           source = tolower(source))
+
+sid<-pid%>%mutate(screen_name= tolower(screen_name))
+
+
+wre<-wre%>%left_join(sid)%>%rename(from_p = party)
+
+sid<-sid%>%rename(source = screen_name)
+
+wre<-wre%>%left_join(sid)%>%rename(to_p = party)
+
+wre<-wre%>%mutate(type=ifelse(from_p==to_p, "Same", "Different"))
+
+relinks<- wre%>%rename(from = screen_name,
+                  to = source)%>%
+        select(from, to, weight, type)
+
+renodes <-read_csv("senators_twitter.csv")%>%
+        mutate(id = tolower(`Official Twitter`))%>%
+        select(id, Senator,`Party affiliation`,label)%>%
+        rename(party = `Party affiliation`,
+                name = Senator)
+
+
+library("igraph")
+regraph <- graph_from_data_frame(d=relinks, vertices=renodes, directed=T)
+
+renodes<-renodes%>%
+        mutate(pcolor = case_when(party =="Democratic Party" ~ "#58A5D4",
+                                  party =="Independent" ~ "#D9A6DF",
+                                  party =="Republican Party" ~"#DB3F3F"))
+
+```
+
+
+visualize whether senators largely re-tweet their own party colleagues’ messages:
+
+Most retweets happens between members from the same party, but for those who receive large amount retweets would get retweeted from senators from different party. As expected, Independents receive and retweet senators in different parties mostly.
+
+
+```{r,fig.height=13, fig.width=13, results='hide'}
+adjustcolor("gray50", alpha=.4)
+tcol<-c("#FFA500B3", "#7F7F7F4D")
+E(regraph)$color <- tcol[as.factor(E(regraph)$type)]
+# E(regraph)$color[E(regraph)$type == "Different"] <- 'red'
+# E(regraph)$color[E(regraph)$type == "Different"] <- 'gray80'
+E(regraph)$arrow.size <- 0.8
+E(regraph)$width <- E(regraph)$weight/2
+V(regraph)$size <- 5
+V(regraph)$label <- NA
+V(regraph)$label.family <-"Palatino"
+V(regraph)$color <- renodes$pcolor
+
+tex <- "Orange edge means retweet from member in different party\nWidth of edge is the times of retweets from another node"
+plot(regraph, layout=layout_with_kk(regraph))+
+        title(main = "Retweet Network", 
+   sub = tex, 
+   font.sub = 3, 
+   font.main = 2,
+   cex.main = 1.5,
+   cex.sub= 1)
+```
+
+### b) Identifying Mentions
+
+Convert the information to an undirected graph object in which the number of mentions is the strength of the relationship between senators.
+
+
+```{r, echo=FALSE}
+
+mention<-senator_tweets %>% 
+        filter(is_retweet==FALSE)%>%
+        filter(is.na(hashtags)==FALSE)%>%
+        select(screen_name, mentions_screen_name)
+
+mention<-mention%>%unnest()%>%
+        filter(tolower(mentions_screen_name) %in% tolower(screen_name))
+
+mention<-mention%>%
+        group_by(screen_name, mentions_screen_name)%>%
+        summarise(weight=n())%>%
+        ungroup()%>%mutate(from=tolower(screen_name),
+                           to = tolower(mentions_screen_name))
+
+
+mlinks<- mention%>%select(from, to, weight)%>%filter(to!=from)
+
+mnodes <-read_csv("senators_twitter.csv")%>%
+        mutate(id = tolower(`Official Twitter`))%>%
+        select(id, `Party affiliation`)%>%
+        rename(party = `Party affiliation`)
+
+
+library("igraph")
+mgraph <- graph_from_data_frame(d=mlinks, vertices=mnodes, directed=F)
+```
+
+
+Comment on what you can see from the visualization:
+
+The most frequent mentions are happen between senators from the same party.
+```{r,fig.height=13, fig.width=13, results='hide'}
+mnodes<-mnodes%>%
+        mutate(pcolor = case_when(party =="Democratic Party" ~ "#58A5D4",
+                                  party =="Independent" ~ "#D9A6DF",
+                                  party =="Republican Party" ~"#DB3F3F"))
+
+mnodes$indegree<-degree(mgraph, mode = "in",normalized = T)
+
+E(mgraph)$color <- "#7F7F7F4D"
+E(mgraph)$arrow.size <- 0.8
+E(mgraph)$width <- E(mgraph)$weight/2
+V(mgraph)$size <- mnodes$indegree*5
+V(mgraph)$label <- NA
+V(mgraph)$color <- mnodes$pcolor
+
+tex <- "blue=Democrats,red=Republicans\nsize:times of mention (normalized)"
+plot(mgraph, layout=layout_with_kk(mgraph))+
+        title(main = "Mention Network", 
+   sub = tex, 
+   font.sub = 3, 
+   font.main = 2,
+   cex.main = 1.5,
+   cex.sub= 1)
+
+```
+
